@@ -3,6 +3,8 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
-    "test:integration": "node tests/integration.cjs"
+    "test:integration": "node tests/integration.cjs",
+    "test:strict": "powershell -ExecutionPolicy Bypass -File ./tests/strict-check.ps1",
+    "verify:submission": "npm run test:strict && npm run test:integration"
   }
 }

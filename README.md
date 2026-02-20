@@ -2,6 +2,27 @@
 
 High-throughput backend analytics system using **CQRS**, **event-driven architecture**, and the **transactional outbox pattern**.
 
+## Architecture Diagram
+
+```text
+[Client]
+  |
+  | Commands (POST/PUT)
+  v
+[Command Service :8080] ---> [Write DB: products/orders/order_items/outbox]
+  |                                   |
+  | outbox poller                     | outbox rows
+  v                                   v
+[RabbitMQ exchange: ecommerce.events] ---> [Consumer Service]
+                              |
+                              v
+                       [Read DB projections/views]
+                              |
+                              | Queries (GET)
+                              v
+                        [Query Service :8081]
+```
+
 ## Architecture
 
 - **Command Service** (`:8080`): Handles write operations (`POST /api/products`, `POST /api/orders`, `PUT /api/products/:id/price`).
@@ -46,6 +67,12 @@ This design ensures **eventual consistency** and avoids dual-write inconsistenci
 docker-compose up --build
 ```
 
+PowerShell equivalent:
+
+```powershell
+docker compose up --build -d
+```
+
 Wait for healthy containers, then test:
 
 ### 1) Create Product
@@ -56,12 +83,28 @@ curl -X POST http://localhost:8080/api/products \
   -d '{"name":"Laptop","category":"electronics","price":1200,"stock":10}'
 ```
 
+Expected response (`201`):
+
+```json
+{
+  "productId": 1
+}
+```
+
 ### 2) Create Order
 
 ```bash
 curl -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
   -d '{"customerId":101,"items":[{"productId":1,"quantity":2,"price":1200}]}'
+```
+
+Expected response (`201`):
+
+```json
+{
+  "orderId": 1
+}
 ```
 
 ### 3) Query Analytics
@@ -73,10 +116,57 @@ curl http://localhost:8081/api/analytics/customers/101/lifetime-value
 curl http://localhost:8081/api/analytics/sync-status
 ```
 
+Sample responses (`200`):
+
+```json
+{
+  "productId": 1,
+  "totalQuantitySold": 2,
+  "totalRevenue": 2400,
+  "orderCount": 1
+}
+```
+
+```json
+{
+  "category": "electronics",
+  "totalRevenue": 2400,
+  "totalOrders": 1
+}
+```
+
+```json
+{
+  "customerId": 101,
+  "totalSpent": 2400,
+  "orderCount": 1,
+  "lastOrderDate": "2026-02-20T00:00:00.000Z"
+}
+```
+
+```json
+{
+  "lastProcessedEventTimestamp": "2026-02-20T00:00:00.000Z",
+  "lagSeconds": 2
+}
+```
+
 ### 4) Run Automated Integration Test
 
 ```bash
 npm run test:integration
+```
+
+### 5) Run Strict Edge-Case Checks
+
+```bash
+npm run test:strict
+```
+
+### 6) Submission Pre-Check (Recommended)
+
+```bash
+npm run verify:submission
 ```
 
 ## Service Endpoints
@@ -96,6 +186,19 @@ npm run test:integration
 - `GET /api/analytics/categories/{category}/revenue`
 - `GET /api/analytics/customers/{customerId}/lifetime-value`
 - `GET /api/analytics/sync-status`
+
+## Environment Variables
+
+| Variable | Service | Purpose | Example |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | command-service | Write DB connection | `postgresql://user:password@db:5432/write_db` |
+| `READ_DATABASE_URL` | query-service, consumer-service | Read DB connection | `postgresql://user:password@read-db:5432/read_db` |
+| `BROKER_URL` | command-service, consumer-service | RabbitMQ connection | `amqp://guest:guest@broker:5672/` |
+| `EXCHANGE_NAME` | command-service, consumer-service | Event exchange name | `ecommerce.events` |
+| `QUEUE_NAME` | consumer-service | Consumer queue | `analytics.readmodel` |
+| `PORT` | command/query service | HTTP listen port | `8080`, `8081` |
+| `OUTBOX_POLL_INTERVAL_MS` | command-service | Outbox publish polling frequency | `2000` |
+| `OUTBOX_BATCH_SIZE` | command-service | Outbox publish batch size | `50` |
 
 ## Data Model
 
@@ -121,3 +224,12 @@ npm run test:integration
 - Consumer logic is idempotent via `processed_events` PK conflict handling.
 - `sync-status` reports current eventual consistency lag.
 - Compose service names are used for inter-service networking (`db`, `read-db`, `broker`).
+
+## Submission Checklist
+
+- `docker-compose up --build` starts all services and health checks pass.
+- Root contains: `docker-compose.yml`, `.env.example`, `submission.json`, `README.md`.
+- Write model tables and `outbox` table exist.
+- Read model projection tables exist and are updated by consumer.
+- Command and query endpoints behave as required.
+- `npm run verify:submission` passes.
