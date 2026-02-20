@@ -1,0 +1,8 @@
+{
+  "name": "ecommerce-cqrs-event-driven-analytics",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test:integration": "node tests/integration.cjs"
+  }
+}

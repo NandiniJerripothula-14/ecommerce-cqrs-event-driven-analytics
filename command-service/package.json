@@ -1,0 +1,13 @@
+{
+  "name": "command-service",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.4",
+    "express": "^4.21.2",
+    "pg": "^8.13.3"
+  }
+}
