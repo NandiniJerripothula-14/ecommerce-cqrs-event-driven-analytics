@@ -45,6 +45,14 @@ High-throughput backend analytics system using **CQRS**, **event-driven architec
 
 This design ensures **eventual consistency** and avoids dual-write inconsistencies.
 
+## Eventual Consistency & Reliability
+
+- The write model is committed first, and events are captured in `outbox` atomically.
+- The outbox publisher asynchronously delivers events to RabbitMQ.
+- The read model can lag briefly; `GET /api/analytics/sync-status` shows last processed event time and lag seconds.
+- Consumer is idempotent via `processed_events(event_id)` and uses retries with a DLQ fallback.
+- Messages that fail processing more than `MAX_RETRIES` are moved to DLQ (`analytics.readmodel.dlq`).
+
 ## Requirements Coverage
 
 - Docker Compose orchestration with health checks for all services
@@ -167,6 +175,18 @@ npm run test:strict
 
 ```bash
 npm run verify:submission
+```
+
+### 7) Inspect DLQ (Operational Check)
+
+```bash
+docker compose exec broker rabbitmqctl list_queues name messages | grep dlq
+```
+
+PowerShell:
+
+```powershell
+docker compose exec broker rabbitmqctl list_queues name messages
 ```
 
 ## Service Endpoints

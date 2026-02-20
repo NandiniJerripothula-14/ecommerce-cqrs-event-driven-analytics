@@ -1,7 +1,15 @@
 const amqp = require('amqplib');
 const { Pool } = require('pg');
 const { applyEvent } = require('./projections');
-const { brokerUrl, readDatabaseUrl, exchangeName, queueName } = require('./config');
+const {
+  brokerUrl,
+  readDatabaseUrl,
+  exchangeName,
+  queueName,
+  dlqExchangeName,
+  dlqQueueName,
+  maxRetries
+} = require('./config');
 
 if (!brokerUrl || !readDatabaseUrl) {
   throw new Error('BROKER_URL and READ_DATABASE_URL are required');
@@ -9,12 +17,58 @@ if (!brokerUrl || !readDatabaseUrl) {
 
 const pool = new Pool({ connectionString: readDatabaseUrl });
 
+async function moveToDlq(channel, msg, event, reason) {
+  const routingKey = event?.eventType || msg.fields.routingKey || 'unknown';
+  const headers = {
+    ...(msg.properties.headers || {}),
+    'x-dlq-reason': String(reason || 'processing_error')
+  };
+
+  channel.publish(dlqExchangeName, routingKey, msg.content, {
+    persistent: true,
+    contentType: msg.properties.contentType || 'application/json',
+    headers
+  });
+
+  channel.ack(msg);
+}
+
+async function retryOrDlq(channel, msg, event, error) {
+  const currentRetryCount = Number(msg.properties?.headers?.['x-retry-count'] || 0);
+
+  if (currentRetryCount < maxRetries) {
+    const headers = {
+      ...(msg.properties.headers || {}),
+      'x-retry-count': currentRetryCount + 1
+    };
+
+    channel.publish(exchangeName, msg.fields.routingKey, msg.content, {
+      persistent: true,
+      contentType: msg.properties.contentType || 'application/json',
+      headers
+    });
+
+    channel.ack(msg);
+    return;
+  }
+
+  await moveToDlq(channel, msg, event, error?.message || 'max_retries_exceeded');
+}
+
 async function processMessage(msg, channel) {
-  const event = JSON.parse(msg.content.toString());
+  let event;
+  try {
+    event = JSON.parse(msg.content.toString());
+  } catch (error) {
+    console.error('Invalid event payload:', error.message);
+    await moveToDlq(channel, msg, null, 'invalid_json');
+    return;
+  }
+
   const eventId = event.eventId;
 
   if (!eventId) {
-    channel.ack(msg);
+    await moveToDlq(channel, msg, event, 'missing_event_id');
     return;
   }
 
@@ -41,7 +95,7 @@ async function processMessage(msg, channel) {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Consumer error:', error.message);
-    channel.nack(msg, false, true);
+    await retryOrDlq(channel, msg, event, error);
   } finally {
     client.release();
   }
@@ -52,8 +106,15 @@ async function run() {
   const channel = await connection.createChannel();
 
   await channel.assertExchange(exchangeName, 'topic', { durable: true });
-  const assertedQueue = await channel.assertQueue(queueName, { durable: true });
+  await channel.assertExchange(dlqExchangeName, 'topic', { durable: true });
+
+  const assertedQueue = await channel.assertQueue(queueName, {
+    durable: true
+  });
+
+  const assertedDlq = await channel.assertQueue(dlqQueueName, { durable: true });
   await channel.bindQueue(assertedQueue.queue, exchangeName, '#');
+  await channel.bindQueue(assertedDlq.queue, dlqExchangeName, '#');
   channel.prefetch(20);
 
   await channel.consume(assertedQueue.queue, (msg) => {
@@ -62,7 +123,10 @@ async function run() {
     }
     processMessage(msg, channel).catch((error) => {
       console.error('Unhandled processing error:', error.message);
-      channel.nack(msg, false, true);
+      retryOrDlq(channel, msg, null, error).catch((retryError) => {
+        console.error('Retry/DLQ fallback failed:', retryError.message);
+        channel.ack(msg);
+      });
     });
   });
 

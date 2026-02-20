@@ -41,3 +41,6 @@ CREATE TABLE IF NOT EXISTS outbox (
 CREATE INDEX IF NOT EXISTS idx_outbox_unpublished ON outbox (published_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders (customer_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items (order_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_published_at ON outbox (published_at);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders (customer_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items (product_id);

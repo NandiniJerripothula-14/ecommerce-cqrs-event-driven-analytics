@@ -76,6 +76,9 @@ services:
       READ_DATABASE_URL: postgresql://user:password@read-db:5432/read_db
       EXCHANGE_NAME: ecommerce.events
       QUEUE_NAME: analytics.readmodel
+      DLQ_EXCHANGE: ecommerce.dlx
+      DLQ_QUEUE: analytics.readmodel.dlq
+      MAX_RETRIES: 3
     healthcheck:
       test: ["CMD", "node", "healthcheck.js"]
       interval: 15s
